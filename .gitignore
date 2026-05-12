@@ -1,0 +1,18 @@
+# Local data and execution logs
+*.xlsx
+logs/
+exports/
+
+# PowerShell transient files
+*.ps1xml
+*.pssc
+*.psd1.bak
+
+# Office lock/temp files
+~$*
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
