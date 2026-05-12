@@ -183,7 +183,7 @@ function Import-ResourceMappingXlsx {
 
     $xlsxPath = Resolve-RequiredFile -Path $Path -Purpose 'resource mapping input'
     $tempXlsxPath = Join-Path $env:TEMP ("ProjectOnlineResourceMapping-{0}.xlsx" -f [guid]::NewGuid())
-    Copy-Item -LiteralPath $xlsxPath -Destination $tempXlsxPath -Force
+    Copy-Item -LiteralPath $xlsxPath -Destination $tempXlsxPath -Force -WhatIf:$false
     $zip = [System.IO.Compression.ZipFile]::OpenRead($tempXlsxPath)
     try {
         [xml] $sharedXml = Read-ZipEntryText -Zip $zip -EntryName 'xl/sharedStrings.xml'
@@ -242,7 +242,7 @@ function Import-ResourceMappingXlsx {
     }
     finally {
         $zip.Dispose()
-        Remove-Item -LiteralPath $tempXlsxPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tempXlsxPath -Force -ErrorAction SilentlyContinue -WhatIf:$false
     }
 }
 
