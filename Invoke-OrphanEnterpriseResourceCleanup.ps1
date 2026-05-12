@@ -58,6 +58,15 @@ param(
     [switch] $EnableExperimentalUserDissociation,
 
     [Parameter(Mandatory = $false)]
+    [switch] $ForceCheckInBeforeUpdate,
+
+    [Parameter(Mandatory = $false)]
+    [switch] $ForceCheckInAfterUpdate,
+
+    [Parameter(Mandatory = $false)]
+    [bool] $RetryOnConflict = $true,
+
+    [Parameter(Mandatory = $false)]
     [switch] $StopOnFirstError
 )
 
@@ -120,6 +129,49 @@ function Import-CsomAssemblies {
     Add-Type -Path (Resolve-RequiredFile -Path $ProjectServerClientDllPath -Purpose 'Project Server CSOM')
 }
 
+function Find-CsomDllFolder {
+    $nugetRoot = Join-Path $env:USERPROFILE '.nuget\packages\microsoft.sharepointonline.csom'
+    if (-not (Test-Path -LiteralPath $nugetRoot)) {
+        return $null
+    }
+
+    $latest = Get-ChildItem -LiteralPath $nugetRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+    if ($null -eq $latest) {
+        return $null
+    }
+
+    $net45 = Join-Path $latest.FullName 'lib\net45'
+    if (Test-Path -LiteralPath $net45) {
+        return $net45
+    }
+
+    return $null
+}
+
+function Resolve-CsomDllPath {
+    param(
+        [string] $ExplicitPath,
+        [Parameter(Mandatory = $true)]
+        [string] $DllName,
+        [Parameter(Mandatory = $true)]
+        [string] $Purpose
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        return (Resolve-RequiredFile -Path $ExplicitPath -Purpose $Purpose)
+    }
+
+    $folder = Find-CsomDllFolder
+    if ($null -ne $folder) {
+        $candidate = Join-Path $folder $DllName
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    return (Resolve-RequiredFile -Path $DllName -Purpose $Purpose)
+}
+
 function Read-ZipEntryText {
     param(
         [Parameter(Mandatory = $true)]
@@ -161,19 +213,24 @@ function Get-XlsxCellValue {
         [Parameter(Mandatory = $true)] [string[]] $SharedStrings
     )
 
-    if ($Cell.t -eq 's' -and -not [string]::IsNullOrWhiteSpace([string]$Cell.v)) {
-        return $SharedStrings[[int]$Cell.v]
+    $cellType = $Cell.GetAttribute('t')
+    $valueNode = $Cell.SelectSingleNode('*[local-name()="v"]')
+    $cellValue = if ($null -ne $valueNode) { $valueNode.InnerText } else { '' }
+
+    if ($cellType -eq 's' -and -not [string]::IsNullOrWhiteSpace($cellValue)) {
+        return $SharedStrings[[int]$cellValue]
     }
 
-    if ($Cell.t -eq 'inlineStr') {
-        return ($Cell.is.t | ForEach-Object { $_.'#text' }) -join ''
+    if ($cellType -eq 'inlineStr') {
+        $inlineString = $Cell.SelectSingleNode('*[local-name()="is"]')
+        if ($null -ne $inlineString) {
+            return ($inlineString.ChildNodes | ForEach-Object { $_.InnerText }) -join ''
+        }
+
+        return ''
     }
 
-    if ($null -ne $Cell.v) {
-        return [string]$Cell.v
-    }
-
-    return ''
+    return $cellValue
 }
 
 function Import-ResourceMappingXlsx {
@@ -202,7 +259,7 @@ function Import-ResourceMappingXlsx {
         foreach ($row in $sheet.worksheet.sheetData.row) {
             $values = @{}
             foreach ($cell in $row.c) {
-                $idx = Convert-ExcelColumnRefToIndex -CellRef $cell.r
+                $idx = Convert-ExcelColumnRefToIndex -CellRef $cell.GetAttribute('r')
                 $values[$idx] = Get-XlsxCellValue -Cell $cell -SharedStrings $sharedStrings.ToArray()
             }
 
@@ -255,8 +312,6 @@ function Connect-ProjectOnline {
         [string] $Region
     )
 
-    . "$PSScriptRoot\Common.ps1"
-
     $uri = New-Object Uri($PwaUrl)
     $script:ProjectOnlineAuthCookie = GetAuthCookie -Uri $uri -Region $Region
     if ([string]::IsNullOrWhiteSpace($script:ProjectOnlineAuthCookie)) {
@@ -270,6 +325,52 @@ function Connect-ProjectOnline {
     })
 
     return $context
+}
+
+function New-ProjectOnlineWebSession {
+    param([Parameter(Mandatory = $true)][Uri] $PwaUri)
+
+    $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    $session.Cookies.SetCookies($PwaUri, $script:ProjectOnlineAuthCookie)
+    return $session
+}
+
+function Force-EnterpriseResourceCheckIn {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $PwaUrl,
+
+        [Parameter(Mandatory = $true)]
+        [guid] $ResourceUid,
+
+        [Parameter(Mandatory = $true)]
+        [Microsoft.PowerShell.Commands.WebRequestSession] $WebSession,
+
+        [Parameter(Mandatory = $true)]
+        [string] $RequestDigest
+    )
+
+    $url = "$($PwaUrl.TrimEnd('/'))/_api/ProjectServer/EnterpriseResources('$($ResourceUid.ToString())')/ForceCheckIn"
+    Invoke-RestMethod -Uri $url -Method POST -UseBasicParsing -WebSession $WebSession -Headers @{
+        'X-RequestDigest' = $RequestDigest
+        'Content-Length' = '0'
+    } | Out-Null
+}
+
+function Test-IsHttpConflict {
+    param([Parameter(Mandatory = $true)] $Exception)
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current -is [System.Net.WebException] -and
+            $null -ne $current.Response -and
+            [int]$current.Response.StatusCode -eq 409) {
+            return $true
+        }
+        $current = $current.InnerException
+    }
+
+    return ($Exception.Message -like '*409*' -or $Exception.Message -like '*Conflit*' -or $Exception.Message -like '*Conflict*')
 }
 
 function Get-EnterpriseResourceByUid {
@@ -348,7 +449,7 @@ function Set-ResourceInactive {
     return 'Inactivated'
 }
 
-function Set-ResourceDisplayName {
+function Set-ResourceInactiveAndDisplayName {
     param(
         [Parameter(Mandatory = $true)]
         [Microsoft.ProjectServer.Client.ProjectContext] $Context,
@@ -360,14 +461,27 @@ function Set-ResourceDisplayName {
         [string] $TargetName
     )
 
-    if ($Resource.Name -eq $TargetName) {
-        return 'NameAlreadySet'
+    $actions = New-Object System.Collections.Generic.List[string]
+
+    if ($Resource.IsActive -ne $false) {
+        $Resource.IsActive = $false
+        [void] $actions.Add('Inactivated')
+    }
+    else {
+        [void] $actions.Add('AlreadyInactive')
     }
 
-    $Resource.Name = $TargetName
+    if ($Resource.Name -ne $TargetName) {
+        $Resource.Name = $TargetName
+        [void] $actions.Add('Renamed')
+    }
+    else {
+        [void] $actions.Add('NameAlreadySet')
+    }
+
     $Context.EnterpriseResources.Update()
     $Context.ExecuteQuery()
-    return 'Renamed'
+    return ($actions -join ';')
 }
 
 function Clear-ResourceUserAccountLink {
@@ -407,6 +521,9 @@ function New-LogRow {
         [string] $DissociationResult,
         [string] $InactiveResult,
         [string] $RenameResult,
+        [string] $CheckInBeforeResult,
+        [string] $CheckInAfterResult,
+        [string] $RetryResult,
         [string] $ErrorMessage
     )
 
@@ -426,16 +543,23 @@ function New-LogRow {
         DissociationResult = $DissociationResult
         InactiveResult = $InactiveResult
         RenameResult = $RenameResult
+        CheckInBeforeResult = $CheckInBeforeResult
+        CheckInAfterResult = $CheckInAfterResult
+        RetryResult = $RetryResult
         ErrorMessage = $ErrorMessage
     }
 }
 
 $inputPath = Resolve-RequiredFile -Path $InputXlsxPath -Purpose 'resource mapping input'
-$projectDll = Find-ProjectServerClientDll -ExplicitPath $ProjectServerClientDllPath
-Import-CsomAssemblies -SharePointClientRuntimeDllPath $SharePointClientRuntimeDllPath -SharePointClientDllPath $SharePointClientDllPath -ProjectServerClientDllPath $projectDll
+$projectDll = Resolve-CsomDllPath -ExplicitPath $ProjectServerClientDllPath -DllName 'Microsoft.ProjectServer.Client.dll' -Purpose 'Project Server CSOM'
+$spRuntimeDll = Resolve-CsomDllPath -ExplicitPath $SharePointClientRuntimeDllPath -DllName 'Microsoft.SharePoint.Client.Runtime.dll' -Purpose 'SharePoint CSOM runtime'
+$spClientDll = Resolve-CsomDllPath -ExplicitPath $SharePointClientDllPath -DllName 'Microsoft.SharePoint.Client.dll' -Purpose 'SharePoint CSOM'
+Import-CsomAssemblies -SharePointClientRuntimeDllPath $spRuntimeDll -SharePointClientDllPath $spClientDll -ProjectServerClientDllPath $projectDll
+
+. "$PSScriptRoot\Common.ps1"
 
 if (-not (Test-Path -LiteralPath $LogFolder)) {
-    New-Item -Path $LogFolder -ItemType Directory | Out-Null
+    New-Item -Path $LogFolder -ItemType Directory -WhatIf:$false | Out-Null
 }
 
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -479,6 +603,14 @@ if (@($rows).Count -eq 0) {
 }
 
 $context = Connect-ProjectOnline -PwaUrl $PwaUrl -Region $Region
+$pwaUri = New-Object Uri($PwaUrl)
+$webSession = New-ProjectOnlineWebSession -PwaUri $pwaUri
+$requestDigest = if ($ForceCheckInBeforeUpdate -or $ForceCheckInAfterUpdate) {
+    GetXRequestDigest -Uri $pwaUri -OnPrem $false -AuthCookie $script:ProjectOnlineAuthCookie
+}
+else {
+    ''
+}
 $log = New-Object System.Collections.Generic.List[object]
 
 foreach ($row in $rows) {
@@ -488,6 +620,9 @@ foreach ($row in $rows) {
     $dissociationResult = $null
     $inactiveResult = $null
     $renameResult = $null
+    $checkInBeforeResult = $null
+    $checkInAfterResult = $null
+    $retryResult = $null
 
     try {
         [guid] $resourceUid = [guid]::Empty
@@ -503,19 +638,51 @@ foreach ($row in $rows) {
         $resource = Get-EnterpriseResourceByUid -Context $context -ResourceUid $resourceUid
         $before = Get-ResourceSnapshot -Resource $resource
 
-        if ($resource.IsCheckedOut) {
-            throw "Resource is checked out and cannot be safely modified: $resourceUid"
+        $operation = "set inactive and rename to '$targetName'"
+        if ($EnableExperimentalUserDissociation) {
+            $operation = "experimentally dissociate orphan account, set inactive, rename to '$targetName'"
         }
-
-        $operation = "dissociate orphan account, set inactive, rename to '$targetName'"
         if ($PSCmdlet.ShouldProcess("$resourceUid / $($resource.Name)", $operation)) {
+            if ($ForceCheckInBeforeUpdate) {
+                Force-EnterpriseResourceCheckIn -PwaUrl $PwaUrl -ResourceUid $resourceUid -WebSession $webSession -RequestDigest $requestDigest
+                $checkInBeforeResult = 'ForceCheckInBeforeUpdateSucceeded'
+            }
+            else {
+                $checkInBeforeResult = 'Skipped'
+            }
+
+            $resource = Get-EnterpriseResourceByUid -Context $context -ResourceUid $resourceUid
             $dissociationResult = Clear-ResourceUserAccountLink -Context $context -Resource $resource -Enabled ([bool]$EnableExperimentalUserDissociation)
 
             $resource = Get-EnterpriseResourceByUid -Context $context -ResourceUid $resourceUid
-            $inactiveResult = Set-ResourceInactive -Context $context -Resource $resource
+            try {
+                $combinedResult = Set-ResourceInactiveAndDisplayName -Context $context -Resource $resource -TargetName $targetName
+                $inactiveResult = $combinedResult
+                $renameResult = $combinedResult
+                $retryResult = 'NotNeeded'
+            }
+            catch {
+                if ($RetryOnConflict -and (Test-IsHttpConflict -Exception $_.Exception)) {
+                    $retryResult = 'ConflictDetected;ForceCheckInAndRetry'
+                    Force-EnterpriseResourceCheckIn -PwaUrl $PwaUrl -ResourceUid $resourceUid -WebSession $webSession -RequestDigest (GetXRequestDigest -Uri $pwaUri -OnPrem $false -AuthCookie $script:ProjectOnlineAuthCookie)
+                    $resource = Get-EnterpriseResourceByUid -Context $context -ResourceUid $resourceUid
+                    $combinedResult = Set-ResourceInactiveAndDisplayName -Context $context -Resource $resource -TargetName $targetName
+                    $inactiveResult = $combinedResult
+                    $renameResult = $combinedResult
+                    $retryResult = "$retryResult;RetrySucceeded"
+                }
+                else {
+                    throw
+                }
+            }
 
-            $resource = Get-EnterpriseResourceByUid -Context $context -ResourceUid $resourceUid
-            $renameResult = Set-ResourceDisplayName -Context $context -Resource $resource -TargetName $targetName
+            if ($ForceCheckInAfterUpdate) {
+                Force-EnterpriseResourceCheckIn -PwaUrl $PwaUrl -ResourceUid $resourceUid -WebSession $webSession -RequestDigest $requestDigest
+                $checkInAfterResult = 'ForceCheckInAfterUpdateSucceeded'
+            }
+            else {
+                $checkInAfterResult = 'Skipped'
+            }
 
             $resource = Get-EnterpriseResourceByUid -Context $context -ResourceUid $resourceUid
             $after = Get-ResourceSnapshot -Resource $resource
@@ -524,13 +691,16 @@ foreach ($row in $rows) {
             $dissociationResult = 'WhatIf'
             $inactiveResult = 'WhatIf'
             $renameResult = 'WhatIf'
+            $checkInBeforeResult = 'WhatIf'
+            $checkInAfterResult = 'WhatIf'
+            $retryResult = 'WhatIf'
             $after = $before
         }
 
-        [void] $log.Add((New-LogRow -Status 'Success' -Row $row -Before $before -After $after -TargetName $targetName -DissociationResult $dissociationResult -InactiveResult $inactiveResult -RenameResult $renameResult -ErrorMessage ''))
+        [void] $log.Add((New-LogRow -Status 'Success' -Row $row -Before $before -After $after -TargetName $targetName -DissociationResult $dissociationResult -InactiveResult $inactiveResult -RenameResult $renameResult -CheckInBeforeResult $checkInBeforeResult -CheckInAfterResult $checkInAfterResult -RetryResult $retryResult -ErrorMessage ''))
     }
     catch {
-        [void] $log.Add((New-LogRow -Status 'Failed' -Row $row -Before $before -After $after -TargetName $targetName -DissociationResult $dissociationResult -InactiveResult $inactiveResult -RenameResult $renameResult -ErrorMessage $_.Exception.Message))
+        [void] $log.Add((New-LogRow -Status 'Failed' -Row $row -Before $before -After $after -TargetName $targetName -DissociationResult $dissociationResult -InactiveResult $inactiveResult -RenameResult $renameResult -CheckInBeforeResult $checkInBeforeResult -CheckInAfterResult $checkInAfterResult -RetryResult $retryResult -ErrorMessage $_.Exception.Message))
         Write-Error $_.Exception.Message
         if ($StopOnFirstError) {
             break

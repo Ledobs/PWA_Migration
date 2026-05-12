@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"  # http://technet.microsoft.com/en-us/library/dd347731.aspx
 Set-StrictMode -Version "Latest" # http://technet.microsoft.com/en-us/library/dd347614.aspx
 
-[Reflection.Assembly]::LoadFrom("$($PSScriptRoot)\Microsoft.Identity.Client.dll") | Out-Null
+[System.Reflection.Assembly]::LoadFile([System.IO.Path]::GetFullPath("$($PSScriptRoot)\Microsoft.Identity.Client.dll")) | Out-Null
 
 Add-Type -Path "$($PSScriptRoot)\UserData.cs" -ReferencedAssemblies System.Data,System.ServiceModel,System.Xml,System.Runtime.Serialization
 Add-Type -Path "$($PSScriptRoot)\UserDataRequestBehavior.cs" -ReferencedAssemblies System.Data,System.ServiceModel
