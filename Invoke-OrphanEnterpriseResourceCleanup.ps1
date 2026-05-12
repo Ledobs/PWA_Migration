@@ -11,21 +11,19 @@ CSOM is not confirmed by an official Microsoft source. This script blocks that
 operation unless -EnableExperimentalUserDissociation is explicitly provided.
 
 The script never deletes or recreates resources.
+
+.EXAMPLE
+.\Invoke-OrphanEnterpriseResourceCleanup.ps1 `
+  -PwaUrl "https://sqi365.sharepoint.com/sites/pwa/" `
+  -InputXlsxPath ".\CorrectionResourceMappingTestSQI.xlsx" `
+  -WhatIf
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-    [Parameter(Mandatory = $false)]
-    [ValidateSet('Custom', 'Idexia', 'SQI')]
-    [string] $TenantPreset = 'Custom',
-
-    [Parameter(Mandatory = $false)]
+    [Parameter(Mandatory = $true)]
     [string] $PwaUrl,
 
-    [Parameter(Mandatory = $false)]
-    [ValidateSet('Custom', 'Default', 'TestIdexia', 'TestSQI')]
-    [string] $InputPreset = 'Custom',
-
-    [Parameter(Mandatory = $false)]
+    [Parameter(Mandatory = $true)]
     [string] $InputXlsxPath,
 
     [Parameter(Mandatory = $false)]
@@ -48,18 +46,6 @@ param(
     [string] $Region = 'Default',
 
     [Parameter(Mandatory = $false)]
-    [int] $MaxRows = 0,
-
-    [Parameter(Mandatory = $false)]
-    [guid[]] $TargetResourceUid,
-
-    [Parameter(Mandatory = $false)]
-    [string] $SourceNameContains,
-
-    [Parameter(Mandatory = $false)]
-    [switch] $AllowFullWorkbook,
-
-    [Parameter(Mandatory = $false)]
     [switch] $ValidateInputOnly,
 
     [Parameter(Mandatory = $false)]
@@ -80,30 +66,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-if ($TenantPreset -eq 'Idexia' -and [string]::IsNullOrWhiteSpace($PwaUrl)) {
-    $PwaUrl = 'https://idexia365.sharepoint.com/sites/pwa/'
-}
-elseif ($TenantPreset -eq 'SQI' -and [string]::IsNullOrWhiteSpace($PwaUrl)) {
-    $PwaUrl = 'https://sqi365.sharepoint.com/sites/pwa/'
-}
-
-if ($InputPreset -eq 'Default' -and [string]::IsNullOrWhiteSpace($InputXlsxPath)) {
-    $InputXlsxPath = Join-Path $PSScriptRoot 'CorrectionResourceMapping.xlsx'
-}
-elseif ($InputPreset -eq 'TestIdexia' -and [string]::IsNullOrWhiteSpace($InputXlsxPath)) {
-    $InputXlsxPath = Join-Path $PSScriptRoot 'CorrectionResourceMappingTest.xlsx'
-}
-elseif ($InputPreset -eq 'TestSQI' -and [string]::IsNullOrWhiteSpace($InputXlsxPath)) {
-    $InputXlsxPath = Join-Path $PSScriptRoot 'CorrectionResourceMappingTestSQI.xlsx'
-}
-elseif ([string]::IsNullOrWhiteSpace($InputXlsxPath)) {
-    $InputXlsxPath = Join-Path $PSScriptRoot 'CorrectionResourceMapping.xlsx'
-}
-
-if ([string]::IsNullOrWhiteSpace($PwaUrl)) {
-    throw "PwaUrl is required unless -TenantPreset Idexia or -TenantPreset SQI is used."
-}
 
 function Resolve-RequiredFile {
     param(
@@ -623,40 +585,25 @@ function New-LogRow {
 $inputPath = Resolve-RequiredFile -Path $InputXlsxPath -Purpose 'resource mapping input'
 $rows = Import-ResourceMappingXlsx -Path $inputPath
 
-if (-not $AllowFullWorkbook -and $null -eq $TargetResourceUid -and [string]::IsNullOrWhiteSpace($SourceNameContains)) {
-    throw "Refusing to process the full workbook without an explicit filter. Use -TargetResourceUid, -SourceNameContains, or -AllowFullWorkbook."
-}
-
-if ($null -ne $TargetResourceUid -and $TargetResourceUid.Count -gt 0) {
-    $uidSet = @{}
-    foreach ($uid in $TargetResourceUid) {
-        $uidSet[$uid.ToString().ToLowerInvariant()] = $true
-    }
-
-    $rows = $rows | Where-Object {
-        $candidate = [guid]::Empty
-        [guid]::TryParse([string]$_.UID, [ref]$candidate) -and $uidSet.ContainsKey($candidate.ToString().ToLowerInvariant())
-    }
-}
-
-if (-not [string]::IsNullOrWhiteSpace($SourceNameContains)) {
-    $rows = $rows | Where-Object {
-        $_.'Source Name' -like "*$SourceNameContains*" -or $_.'New Name' -like "*$SourceNameContains*"
-    }
-}
-
-if ($MaxRows -gt 0) {
-    $rows = $rows | Select-Object -First $MaxRows
-}
+$rows = @($rows | Where-Object {
+    $uid = if ($_.PSObject.Properties.Name -contains 'UID') { ([string]$_.UID).Trim() } else { '' }
+    $sourceName = if ($_.PSObject.Properties.Name -contains 'Source Name') { ([string]$_.'Source Name').Trim() } else { '' }
+    $newName = if ($_.PSObject.Properties.Name -contains 'New Name') { ([string]$_.'New Name').Trim() } else { '' }
+    $candidate = [guid]::Empty
+    -not [string]::IsNullOrWhiteSpace($uid) -and
+        -not [string]::IsNullOrWhiteSpace($sourceName) -and
+        -not [string]::IsNullOrWhiteSpace($newName) -and
+        [guid]::TryParse($uid, [ref]$candidate)
+})
 
 if ($ValidateInputOnly) {
     $rows | Select-Object 'New Name','Source Name','UID','UPN','Source Account','Target Account','Action' | Format-Table -AutoSize
-    Write-Host "Input validation only. Selected rows: $(@($rows).Count)"
+    Write-Host "Input validation only. Valid rows: $(@($rows).Count)"
     return
 }
 
 if (@($rows).Count -eq 0) {
-    throw "No input row matched the requested filter."
+    throw "No valid input row found in the workbook. Required columns: UID, Source Name, New Name."
 }
 
 $projectDll = Resolve-CsomDllPath -ExplicitPath $ProjectServerClientDllPath -DllName 'Microsoft.ProjectServer.Client.dll' -Purpose 'Project Server CSOM'

@@ -1,10 +1,10 @@
 # PWA Migration
 
-Scripts PowerShell pour analyser et traiter prudemment des ressources d'entreprise Project Online avant migration.
+Scripts PowerShell pour traiter prudemment des ressources d'entreprise Project Online avant migration.
 
 ## Contenu principal
 
-- `Invoke-OrphanEnterpriseResourceCleanup.ps1` : script pilote ciblant une ressource existante par UID pour la rendre inactive et appliquer un nom d'archive.
+- `Invoke-OrphanEnterpriseResourceCleanup.ps1` : lit un fichier Excel de mapping et traite les ressources existantes par `UID`.
 - `Common.ps1` : fonctions communes d'authentification et de connexion Project Online issues du package Microsoft.
 - `ExportProjectUserContent.ps1` et `Invoke-RedactProjectUser.ps1` : scripts Microsoft de reference pour export/redaction Project Online.
 
@@ -12,19 +12,47 @@ Scripts PowerShell pour analyser et traiter prudemment des ressources d'entrepri
 
 Les fichiers Excel, journaux et exports sont exclus par `.gitignore`, car ils peuvent contenir des noms, UPN, comptes ou donnees de migration.
 
-## Usage pilote
+## Format Excel attendu
+
+Le fichier Excel est la liste de traitement. Les lignes valides doivent contenir au minimum :
+
+- `UID`
+- `Source Name`
+- `New Name`
+
+Les lignes vides ou avec `UID` invalide sont ignorees.
+
+## Usage
 
 Executer avec Windows PowerShell 5.1.
 
+Validation locale du fichier :
+
 ```powershell
 .\Invoke-OrphanEnterpriseResourceCleanup.ps1 `
-  -PwaUrl "https://idexia365.sharepoint.com/sites/pwa/" `
-  -InputXlsxPath ".\CorrectionResourceMappingTest.xlsx" `
-  -TargetResourceUid "08aa95c4-80eb-f011-9aad-00155dc06909" `
-  -ProjectServerClientDllPath "C:\Users\FrançoisBreton\.nuget\packages\microsoft.sharepointonline.csom\16.1.26615.12013\lib\net45\Microsoft.ProjectServer.Client.dll" `
-  -SharePointClientRuntimeDllPath "C:\Users\FrançoisBreton\.nuget\packages\microsoft.sharepointonline.csom\16.1.26615.12013\lib\net45\Microsoft.SharePoint.Client.Runtime.dll" `
-  -SharePointClientDllPath "C:\Users\FrançoisBreton\.nuget\packages\microsoft.sharepointonline.csom\16.1.26615.12013\lib\net45\Microsoft.SharePoint.Client.dll" `
+  -PwaUrl "https://sqi365.sharepoint.com/sites/pwa/" `
+  -InputXlsxPath ".\CorrectionResourceMappingTestSQI.xlsx" `
+  -ValidateInputOnly
+```
+
+Simulation :
+
+```powershell
+.\Invoke-OrphanEnterpriseResourceCleanup.ps1 `
+  -PwaUrl "https://sqi365.sharepoint.com/sites/pwa/" `
+  -InputXlsxPath ".\CorrectionResourceMappingTestSQI.xlsx" `
   -WhatIf
+```
+
+Execution :
+
+```powershell
+.\Invoke-OrphanEnterpriseResourceCleanup.ps1 `
+  -PwaUrl "https://sqi365.sharepoint.com/sites/pwa/" `
+  -InputXlsxPath ".\CorrectionResourceMappingTestSQI.xlsx" `
+  -ForceCheckInBeforeUpdate `
+  -ForceCheckInAfterUpdate `
+  -StopOnFirstError
 ```
 
 ## Limite importante
