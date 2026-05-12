@@ -14,11 +14,19 @@ The script never deletes or recreates resources.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Custom', 'Idexia', 'SQI')]
+    [string] $TenantPreset = 'Custom',
+
+    [Parameter(Mandatory = $false)]
     [string] $PwaUrl,
 
     [Parameter(Mandatory = $false)]
-    [string] $InputXlsxPath = (Join-Path $PSScriptRoot 'CorrectionResourceMapping.xlsx'),
+    [ValidateSet('Custom', 'Default', 'TestIdexia', 'TestSQI')]
+    [string] $InputPreset = 'Custom',
+
+    [Parameter(Mandatory = $false)]
+    [string] $InputXlsxPath,
 
     [Parameter(Mandatory = $false)]
     [string] $Suffix = ' (archive)',
@@ -72,6 +80,30 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($TenantPreset -eq 'Idexia' -and [string]::IsNullOrWhiteSpace($PwaUrl)) {
+    $PwaUrl = 'https://idexia365.sharepoint.com/sites/pwa/'
+}
+elseif ($TenantPreset -eq 'SQI' -and [string]::IsNullOrWhiteSpace($PwaUrl)) {
+    $PwaUrl = 'https://sqi365.sharepoint.com/sites/pwa/'
+}
+
+if ($InputPreset -eq 'Default' -and [string]::IsNullOrWhiteSpace($InputXlsxPath)) {
+    $InputXlsxPath = Join-Path $PSScriptRoot 'CorrectionResourceMapping.xlsx'
+}
+elseif ($InputPreset -eq 'TestIdexia' -and [string]::IsNullOrWhiteSpace($InputXlsxPath)) {
+    $InputXlsxPath = Join-Path $PSScriptRoot 'CorrectionResourceMappingTest.xlsx'
+}
+elseif ($InputPreset -eq 'TestSQI' -and [string]::IsNullOrWhiteSpace($InputXlsxPath)) {
+    $InputXlsxPath = Join-Path $PSScriptRoot 'CorrectionResourceMappingTestSQI.xlsx'
+}
+elseif ([string]::IsNullOrWhiteSpace($InputXlsxPath)) {
+    $InputXlsxPath = Join-Path $PSScriptRoot 'CorrectionResourceMapping.xlsx'
+}
+
+if ([string]::IsNullOrWhiteSpace($PwaUrl)) {
+    throw "PwaUrl is required unless -TenantPreset Idexia or -TenantPreset SQI is used."
+}
 
 function Resolve-RequiredFile {
     param(
@@ -589,19 +621,6 @@ function New-LogRow {
 }
 
 $inputPath = Resolve-RequiredFile -Path $InputXlsxPath -Purpose 'resource mapping input'
-$projectDll = Resolve-CsomDllPath -ExplicitPath $ProjectServerClientDllPath -DllName 'Microsoft.ProjectServer.Client.dll' -Purpose 'Project Server CSOM'
-$spRuntimeDll = Resolve-CsomDllPath -ExplicitPath $SharePointClientRuntimeDllPath -DllName 'Microsoft.SharePoint.Client.Runtime.dll' -Purpose 'SharePoint CSOM runtime'
-$spClientDll = Resolve-CsomDllPath -ExplicitPath $SharePointClientDllPath -DllName 'Microsoft.SharePoint.Client.dll' -Purpose 'SharePoint CSOM'
-Import-CsomAssemblies -SharePointClientRuntimeDllPath $spRuntimeDll -SharePointClientDllPath $spClientDll -ProjectServerClientDllPath $projectDll
-
-. "$PSScriptRoot\Common.ps1"
-
-if (-not (Test-Path -LiteralPath $LogFolder)) {
-    New-Item -Path $LogFolder -ItemType Directory -WhatIf:$false | Out-Null
-}
-
-$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$logPath = Join-Path $LogFolder "orphan-resource-cleanup-$timestamp.csv"
 $rows = Import-ResourceMappingXlsx -Path $inputPath
 
 if (-not $AllowFullWorkbook -and $null -eq $TargetResourceUid -and [string]::IsNullOrWhiteSpace($SourceNameContains)) {
@@ -639,6 +658,20 @@ if ($ValidateInputOnly) {
 if (@($rows).Count -eq 0) {
     throw "No input row matched the requested filter."
 }
+
+$projectDll = Resolve-CsomDllPath -ExplicitPath $ProjectServerClientDllPath -DllName 'Microsoft.ProjectServer.Client.dll' -Purpose 'Project Server CSOM'
+$spRuntimeDll = Resolve-CsomDllPath -ExplicitPath $SharePointClientRuntimeDllPath -DllName 'Microsoft.SharePoint.Client.Runtime.dll' -Purpose 'SharePoint CSOM runtime'
+$spClientDll = Resolve-CsomDllPath -ExplicitPath $SharePointClientDllPath -DllName 'Microsoft.SharePoint.Client.dll' -Purpose 'SharePoint CSOM'
+Import-CsomAssemblies -SharePointClientRuntimeDllPath $spRuntimeDll -SharePointClientDllPath $spClientDll -ProjectServerClientDllPath $projectDll
+
+. "$PSScriptRoot\Common.ps1"
+
+if (-not (Test-Path -LiteralPath $LogFolder)) {
+    New-Item -Path $LogFolder -ItemType Directory -WhatIf:$false | Out-Null
+}
+
+$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$logPath = Join-Path $LogFolder "orphan-resource-cleanup-$timestamp.csv"
 
 $context = Connect-ProjectOnline -PwaUrl $PwaUrl -Region $Region
 $pwaUri = New-Object Uri($PwaUrl)
