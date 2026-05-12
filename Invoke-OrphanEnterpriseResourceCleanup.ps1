@@ -373,6 +373,44 @@ function Test-IsHttpConflict {
     return ($Exception.Message -like '*409*' -or $Exception.Message -like '*Conflit*' -or $Exception.Message -like '*Conflict*')
 }
 
+function Invoke-ResourceForceCheckInIfNeeded {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $PwaUrl,
+
+        [Parameter(Mandatory = $true)]
+        [guid] $ResourceUid,
+
+        [Parameter(Mandatory = $true)]
+        [bool] $IsCheckedOut,
+
+        [Parameter(Mandatory = $true)]
+        [Microsoft.PowerShell.Commands.WebRequestSession] $WebSession,
+
+        [Parameter(Mandatory = $true)]
+        [string] $RequestDigest,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Stage
+    )
+
+    if (-not $IsCheckedOut) {
+        return "$Stage`:SkippedNotCheckedOut"
+    }
+
+    try {
+        Force-EnterpriseResourceCheckIn -PwaUrl $PwaUrl -ResourceUid $ResourceUid -WebSession $WebSession -RequestDigest $RequestDigest
+        return "$Stage`:Succeeded"
+    }
+    catch {
+        if (Test-IsHttpConflict -Exception $_.Exception) {
+            return "$Stage`:Conflict"
+        }
+
+        throw
+    }
+}
+
 function Get-EnterpriseResourceByUid {
     param(
         [Parameter(Mandatory = $true)]
@@ -644,8 +682,7 @@ foreach ($row in $rows) {
         }
         if ($PSCmdlet.ShouldProcess("$resourceUid / $($resource.Name)", $operation)) {
             if ($ForceCheckInBeforeUpdate) {
-                Force-EnterpriseResourceCheckIn -PwaUrl $PwaUrl -ResourceUid $resourceUid -WebSession $webSession -RequestDigest $requestDigest
-                $checkInBeforeResult = 'ForceCheckInBeforeUpdateSucceeded'
+                $checkInBeforeResult = Invoke-ResourceForceCheckInIfNeeded -PwaUrl $PwaUrl -ResourceUid $resourceUid -IsCheckedOut ([bool]$before.IsCheckedOut) -WebSession $webSession -RequestDigest $requestDigest -Stage 'ForceCheckInBeforeUpdate'
             }
             else {
                 $checkInBeforeResult = 'Skipped'
@@ -677,8 +714,9 @@ foreach ($row in $rows) {
             }
 
             if ($ForceCheckInAfterUpdate) {
-                Force-EnterpriseResourceCheckIn -PwaUrl $PwaUrl -ResourceUid $resourceUid -WebSession $webSession -RequestDigest $requestDigest
-                $checkInAfterResult = 'ForceCheckInAfterUpdateSucceeded'
+                $resourceAfterUpdate = Get-EnterpriseResourceByUid -Context $context -ResourceUid $resourceUid
+                $snapshotAfterUpdate = Get-ResourceSnapshot -Resource $resourceAfterUpdate
+                $checkInAfterResult = Invoke-ResourceForceCheckInIfNeeded -PwaUrl $PwaUrl -ResourceUid $resourceUid -IsCheckedOut ([bool]$snapshotAfterUpdate.IsCheckedOut) -WebSession $webSession -RequestDigest $requestDigest -Stage 'ForceCheckInAfterUpdate'
             }
             else {
                 $checkInAfterResult = 'Skipped'
@@ -701,7 +739,7 @@ foreach ($row in $rows) {
     }
     catch {
         [void] $log.Add((New-LogRow -Status 'Failed' -Row $row -Before $before -After $after -TargetName $targetName -DissociationResult $dissociationResult -InactiveResult $inactiveResult -RenameResult $renameResult -CheckInBeforeResult $checkInBeforeResult -CheckInAfterResult $checkInAfterResult -RetryResult $retryResult -ErrorMessage $_.Exception.Message))
-        Write-Error $_.Exception.Message
+        Write-Host "ERROR for resource $($row.UID): $($_.Exception.Message)" -ForegroundColor Red
         if ($StopOnFirstError) {
             break
         }
