@@ -4,13 +4,23 @@ Scripts PowerShell pour traiter prudemment des ressources d'entreprise Project O
 
 ## Contenu principal
 
+- `ResourceIdentityReconciliation/` : inventaire en lecture seule et rapport Excel de comparaison des
+  relations `OWNER`, `PROJECT_TEAM` et `ASSIGNMENT` entre Project Online et Project Server SE.
 - `Invoke-OrphanEnterpriseResourceCleanup.ps1` : lit un fichier Excel de mapping et traite les ressources existantes par `UID`.
 - `Common.ps1` : fonctions communes d'authentification et de connexion Project Online issues du package Microsoft.
 - `ExportProjectUserContent.ps1` et `Invoke-RedactProjectUser.ps1` : scripts Microsoft de reference pour export/redaction Project Online.
 
 ## Donnees exclues du depot
 
-Les fichiers Excel, journaux et exports sont exclus par `.gitignore`, car ils peuvent contenir des noms, UPN, comptes ou donnees de migration.
+Les fichiers Excel, journaux, exports et configurations locales sont exclus par `.gitignore`, car ils
+peuvent contenir des noms, UPN, comptes, URL ou donnees de migration.
+
+## Réconciliation des identités
+
+Le mode Inventory est documenté dans
+[`ResourceIdentityReconciliation/README.md`](ResourceIdentityReconciliation/README.md). Son exemple
+de configuration est générique; les paramètres propres au client demeurent dans un fichier local
+ignoré par Git.
 
 ## Format Excel attendu
 
