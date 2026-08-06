@@ -30,7 +30,7 @@ Validation locale du fichier :
 
 ```powershell
 .\Invoke-OrphanEnterpriseResourceCleanup.ps1 `
-  -PwaUrl "https://[domaine].sharepoint.com/sites/pwa/" `
+  -PwaUrl "https://tenant.sharepoint.com/sites/pwa/" `
   -InputXlsxPath ".\CorrectionResourceMappingTest.xlsx" `
   -ValidateInputOnly
 ```
@@ -39,7 +39,7 @@ Simulation :
 
 ```powershell
 .\Invoke-OrphanEnterpriseResourceCleanup.ps1 `
-  -PwaUrl "https://[domaine].sharepoint.com/sites/pwa/" `
+  -PwaUrl "https://tenant.sharepoint.com/sites/pwa/" `
   -InputXlsxPath ".\CorrectionResourceMappingTest.xlsx" `
   -WhatIf
 ```
@@ -48,7 +48,7 @@ Execution :
 
 ```powershell
 .\Invoke-OrphanEnterpriseResourceCleanup.ps1 `
-  -PwaUrl "https://[domaine].sharepoint.com/sites/pwa/" `
+  -PwaUrl "https://tenant.sharepoint.com/sites/pwa/" `
   -InputXlsxPath ".\CorrectionResourceMappingTest.xlsx" `
   -ForceCheckInBeforeUpdate `
   -ForceCheckInAfterUpdate `
