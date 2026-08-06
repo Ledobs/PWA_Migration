@@ -3,6 +3,10 @@
 logs/
 exports/
 
+# Local client configurations. Only sanitized examples can be committed.
+ResourceIdentityReconciliation/config/*.psd1
+!ResourceIdentityReconciliation/config/*.example.psd1
+
 # PowerShell transient files
 *.ps1xml
 *.pssc
@@ -15,4 +19,3 @@ exports/
 .DS_Store
 Thumbs.db
 .vscode/
-
