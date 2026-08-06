@@ -1,0 +1,33 @@
+INSTRUCTIONS D’INSTALLATION – DIAGNOSTIC OLE PROJECT
+
+1. Ouvrir le plan à analyser dans Microsoft Project Desktop.
+
+2. Appuyer sur ALT + F11 pour ouvrir l’éditeur VBA.
+
+3. Dans l’éditeur VBA, aller dans :
+   File > Import File...
+
+4. Sélectionner le fichier :
+   Diagnostic_OLE_Project.bas
+
+5. Vérifier que le module suivant apparaît dans le projet VBA :
+   Ouvrir modDiagnosticOLE
+
+6. Ouvrir le panneau immediate CTRL+G
+
+7. Utiliser Run Sub pour lancer la macro. Bouton Play ou touche F5.
+
+8. Sélectionner la macro :
+   DiagnosticOLE_Complet ou DiagnosticOLE_Rapide selon le besoin
+
+9. Cliquer sur Run / Exécuter.
+
+10. Si Microsoft Project affiche un avertissement OLE pendant l’analyse :
+    - prendre en note l’élément affiché dans la barre d’état;
+    - répondre Non pour ne pas activer l’objet OLE.
+
+11. À la fin de l’analyse, récupérer le rapport dans :
+    C:\Macro
+
+Le dossier C:\Macro est créé automatiquement s’il n’existe pas.
+Le rapport CSV est généré en UTF-8 avec le séparateur ;.
